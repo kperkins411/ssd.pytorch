@@ -58,7 +58,7 @@ class MultiBoxLoss(nn.Module):
                 shape: [batch_size,num_objs,5] (last idx is the label).
         """
         loc_data, conf_data, priors = predictions
-        num = loc_data.size(0)
+        num = loc_data.size(0)  #batch size
         priors = priors[:loc_data.size(1), :]
         num_priors = (priors.size(0))
         num_classes = self.num_classes
@@ -91,7 +91,8 @@ class MultiBoxLoss(nn.Module):
 
         # Compute max conf across batch for hard negative mining
         batch_conf = conf_data.view(-1, self.num_classes)
-        loss_c = log_sum_exp(batch_conf) - batch_conf.gather(1, conf_t.view(-1, 1))
+        loss_c = (log_sum_exp(batch_conf) - batch_conf.gather(1, conf_t.view(-1, 1))).reshape(pos.shape[0],-1)
+        # loss_c = (log_sum_exp(batch_conf) - batch_conf.gather(1, conf_t.view(-1, 1)))
 
         # Hard Negative Mining
         loss_c[pos] = 0  # filter out pos boxes for now
@@ -110,8 +111,17 @@ class MultiBoxLoss(nn.Module):
         loss_c = F.cross_entropy(conf_p, targets_weighted, size_average=False)
 
         # Sum of losses: L(x,c,l,g) = (Lconf(x, c) + αLloc(x,l,g)) / N
-
+        #
         N = num_pos.data.sum()
-        loss_l /= N
-        loss_c /= N
+        # loss_l = loss_l.float()
+        # print("type is" + str(type(loss_l)))
+        N = N.type(torch.cuda.FloatTensor)
+        loss_l = loss_l/N
+        loss_c = loss_c /N
+
+        # (loss_l.float()) /= N
+        # loss_c /= N
+        # # N = num_pos.data.sum().double()
+        # loss_l = (loss_l /= N).double()
+        # loss_c = (loss_c /= N).double()
         return loss_l, loss_c

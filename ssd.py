@@ -29,9 +29,12 @@ class SSD(nn.Module):
         super(SSD, self).__init__()
         self.phase = phase
         self.num_classes = num_classes
-        self.cfg = (coco, voc)[num_classes == 21]
+        self.cfg = (coco, voc)[num_classes == 21]   #what the hell asshole!!! if num_classes==21 its (coco, voc)[1] or
+                                                    # VOC, this kind of obscure syntax is infuruiating! MAKE YOUR CODE
+                                                    # MAINTAINABLE!!!
         self.priorbox = PriorBox(self.cfg)
-        self.priors = Variable(self.priorbox.forward(), volatile=True)
+        with torch.no_grad():
+            self.priors = Variable(self.priorbox.forward())
         self.size = size
 
         # SSD network
@@ -123,7 +126,7 @@ class SSD(nn.Module):
 
 # This function is derived from torchvision VGG make_layers()
 # https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py
-def vgg(cfg, i, batch_norm=False):
+def vgg(cfg, i, batch_norm=False, requires_grad = False):
     layers = []
     in_channels = i
     for v in cfg:
@@ -143,6 +146,11 @@ def vgg(cfg, i, batch_norm=False):
     conv7 = nn.Conv2d(1024, 1024, kernel_size=1)
     layers += [pool5, conv6,
                nn.ReLU(inplace=True), conv7, nn.ReLU(inplace=True)]
+
+    #enable or disable gradients
+    for layer in layers:
+        layer.requires_grad = requires_grad
+
     return layers
 
 
@@ -193,7 +201,6 @@ mbox = {
     '300': [4, 6, 6, 6, 4, 4],  # number of boxes per feature map location
     '512': [],
 }
-
 
 def build_ssd(phase, size=300, num_classes=21):
     if phase != "test" and phase != "train":
