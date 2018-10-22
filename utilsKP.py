@@ -1,6 +1,7 @@
 import torch.optim as optim
 import numpy as np
-import tf_logger
+#logging for tensorflow
+from tensorboardX import SummaryWriter
 
 def do_requires_grad(model,*,requires_grad, apply_to_this_layer_on =0):
     '''
@@ -92,7 +93,6 @@ class CyclicLR(object):
                 type(optimizer).__name__))
         self.optimizer = optimizer
         self.step_numb=0
-        self.logger = tf_logger.Logger('./logs')
 
         if isinstance(base_lr, list) or isinstance(base_lr, tuple):
             if len(base_lr) != len(optimizer.param_groups):
@@ -170,7 +170,6 @@ class CyclicLR(object):
                 lr = base_lr + base_height * self.scale_fn(self.last_batch_iteration)
             lrs.append(lr)
             self.step_numb+=1
-        self.logger.scalar_summary(CyclicLR.TAG_CLR,lrs[0],self.step_numb)
         return lrs
 
 class CosAnnealLR(CyclicLR):
@@ -193,6 +192,10 @@ class CosAnnealLR(CyclicLR):
 
         self.scale_fn = self._exp_range_scale_fn    #OK to scale with this
         self.scale_mode = 'iterations'
+        self.writer = SummaryWriter()
+
+    def setWriter(self,writer):
+        self.writer = writer
 
     def get_lr(self):
         loc= self.last_batch_iteration%self.max_iter
@@ -200,7 +203,8 @@ class CosAnnealLR(CyclicLR):
 
         lrs=[]
         lrs.append(lr)
-        self.logger.scalar_summary(CyclicLR.TAG_CLR, lrs[0], self.last_batch_iteration)
+
+        self.writer.add_scalar('cosann', lrs[0], self.last_batch_iteration)
 
         return lrs
 

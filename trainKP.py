@@ -14,8 +14,8 @@ import torch.nn.init as init
 import torch.utils.data as data
 import numpy as np
 import argparse
-import visdom as viz
-from torchsummary import summary
+from tensorboardX import SummaryWriter
+# import tf_logger
 
 import utilsKP
 
@@ -129,6 +129,8 @@ def train():
 
     #lets try this new fancy cyclic learning rate
     # scheduler = utilsKP.CyclicLR(optimizer, base_lr=1e-4, max_lr=5e-3,step_size = 150)
+
+    #or how about cosign annealing with warm restarts
     scheduler = utilsKP.CosAnnealLR(optimizer, base_lr=1e-4, max_lr=5e-3, step_size=150,batch_size = 64)
 
     # we are going to train so set up gradients
@@ -147,6 +149,14 @@ def train():
                                   num_workers=args.num_workers,
                                   shuffle=True, collate_fn=detection_collate,
                                   pin_memory=True)
+
+    #logging for tensorflow
+    writer = SummaryWriter()
+
+    #use same writer for LR
+    scheduler.setWriter(writer)
+
+    all_batch_cntr =0
 
     for epoch in range(NUMB_EPOCHS):
         print(f"Starting epoch {epoch}")
@@ -206,17 +216,22 @@ def train():
                 torch.save(ssd_net.state_dict(),
                            args.save_folder + '' + args.dataset + '1.pth')
 
+                all_batch_cntr += batch_cntr
+                writer.add_scalar('logs/loss_L', loss_l.item(), all_batch_cntr)
+                writer.add_scalar('logs/loss_C', loss_c.item(), all_batch_cntr)
+                writer.add_scalar('logs/loss_Total', loss, all_batch_cntr)
 
-#not used here for illustration
-def adjust_learning_rate(optimizer, gamma, step):
-    """Sets the learning rate to the initial LR decayed by 10 at every
-        specified step
-    # Adapted from PyTorch Imagenet example:
-    # https://github.com/pytorch/examples/blob/master/imagenet/main.py
-    """
-    lr = args.lr * (gamma ** (step))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+
+# #not used here for illustration
+# def adjust_learning_rate(optimizer, gamma, step):
+#     """Sets the learning rate to the initial LR decayed by 10 at every
+#         specified step
+#     # Adapted from PyTorch Imagenet example:
+#     # https://github.com/pytorch/examples/blob/master/imagenet/main.py
+#     """
+#     lr = args.lr * (gamma ** (step))
+#     for param_group in optimizer.param_groups:
+#         param_group['lr'] = lr
 
 
 def xavier(param):
