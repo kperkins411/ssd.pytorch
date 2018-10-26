@@ -26,8 +26,6 @@ def str2bool(v):
 parser = argparse.ArgumentParser(
     description='Single Shot MultiBox Detector Training With Pytorch')
 train_set = parser.add_mutually_exclusive_group()
-parser.add_argument('--dataset', default='VOC', choices=['VOC', 'COCO'],
-                    type=str, help='VOC or COCO')
 parser.add_argument('--dataset_root', default=VOC_ROOT,
                     help='Dataset root directory path')
 parser.add_argument('--basenet', default='vgg16_reducedfc.pth',
@@ -65,28 +63,12 @@ else:
 if not os.path.exists(args.save_folder):
     os.mkdir(args.save_folder)
 
-
-
 def train():
     NUMB_EPOCHS = 10
-    if args.dataset == 'COCO':
-        if args.dataset_root == VOC_ROOT:
-            if not os.path.exists(COCO_ROOT):
-                parser.error('Must specify dataset_root if specifying dataset')
-            print("WARNING: Using default COCO dataset_root because " +
-                  "--dataset_root was not specified.")
-            args.dataset_root = COCO_ROOT
-        cfg = coco
-        dataset = COCODetection(root=args.dataset_root,
-                                transform=SSDAugmentation(cfg['min_dim'],
-                                                          MEANS))
-    elif args.dataset == 'VOC':
-        if args.dataset_root == COCO_ROOT:
-            parser.error('Must specify dataset if specifying dataset_root')
-        cfg = voc
-        dataset = VOCDetection(root=args.dataset_root,image_sets=[('2007', 'trainval')],
-                               transform=SSDAugmentation(cfg['min_dim'],
-                                                         MEANS))
+
+    cfg = voc
+    dataset = VOCDetection(root=args.dataset_root,image_sets=[('2007', 'trainval')],
+                               transform=SSDAugmentation(cfg['min_dim'],MEANS))
 
     ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
 
@@ -157,6 +139,7 @@ def train():
     scheduler.setWriter(writer)
 
     all_batch_cntr =0
+    loss_lowest = 10000
 
     for epoch in range(NUMB_EPOCHS):
         print(f"Starting epoch {epoch}")
@@ -176,9 +159,9 @@ def train():
         #step the learning rates (for non cyclic)
         # scheduler.step()
 
-        #for first 2 epochs do not backprop through vgg
+        #for first few epochs do not backprop through vgg
         #train custom head first
-        if (epoch == NUMB_EPOCHS-5):
+        if (epoch == NUMB_EPOCHS-6):
             utilsKP.do_requires_grad(ssd_net.vgg, requires_grad=True, apply_to_this_layer_on=24)
             optimizer = optim.SGD(filter(lambda p: p.requires_grad, ssd_net.parameters()), lr=args.lr, momentum=args.momentum,
                                   weight_decay=args.weight_decay)
@@ -203,6 +186,14 @@ def train():
             optimizer.zero_grad()
             loss_l, loss_c = criterion(out, targets)
             loss = loss_l + loss_c
+
+            # save the best model
+            if  loss < loss_lowest:
+                # print(f"New lowest loss! Was {loss_lowest} is now {loss}")
+                loss_lowest = loss
+                torch.save(ssd_net.state_dict(),
+                           args.save_folder + '' + 'model_best_weights_10.pth')
+
             loss.backward()
             optimizer.step()
             scheduler.batch_step()    #for cyclic learning rate ONLY
@@ -213,25 +204,11 @@ def train():
 
             if batch_cntr % 10 == 0:
                 print(f'batch_cntr ={batch_cntr} || Loss: {loss.item()}')
-                torch.save(ssd_net.state_dict(),
-                           args.save_folder + '' + args.dataset + '1.pth')
 
                 all_batch_cntr += batch_cntr
                 writer.add_scalar('logs/loss_L', loss_l.item(), all_batch_cntr)
                 writer.add_scalar('logs/loss_C', loss_c.item(), all_batch_cntr)
                 writer.add_scalar('logs/loss_Total', loss, all_batch_cntr)
-
-
-# #not used here for illustration
-# def adjust_learning_rate(optimizer, gamma, step):
-#     """Sets the learning rate to the initial LR decayed by 10 at every
-#         specified step
-#     # Adapted from PyTorch Imagenet example:
-#     # https://github.com/pytorch/examples/blob/master/imagenet/main.py
-#     """
-#     lr = args.lr * (gamma ** (step))
-#     for param_group in optimizer.param_groups:
-#         param_group['lr'] = lr
 
 
 def xavier(param):

@@ -12,9 +12,11 @@ from PIL import Image
 from data import VOCAnnotationTransform, VOCDetection, BaseTransform, VOC_CLASSES
 import torch.utils.data as data
 from ssd import build_ssd
+from utils.augmentations import SSDTestAugmentation
+from data import config as cfg
 
 parser = argparse.ArgumentParser(description='Single Shot MultiBox Detection')
-parser.add_argument('--trained_model', default='weights/VOC1.pth',
+parser.add_argument('--trained_model', default='weights/model_best_weights_10.pth',
                     type=str, help='Trained state_dict file path to open')
 parser.add_argument('--save_folder', default='eval/', type=str,
                     help='Dir to save results')
@@ -41,7 +43,9 @@ def test_net(save_folder, net, cuda, testset, transform, thresh):
     num_images = len(testset)
     for i in range(num_images):
         print('Testing image {:d}/{:d}....'.format(i+1, num_images))
+
         img = testset.pull_image(i)
+
         img_id, annotation = testset.pull_anno(i)
         x = torch.from_numpy(transform(img)[0]).permute(2, 0, 1)
         x = Variable(x.unsqueeze(0))
@@ -84,7 +88,8 @@ def test_voc():
     net.eval()
     print('Finished loading model!')
     # load data
-    testset = VOCDetection(args.voc_root, [('2007', 'test')], None, VOCAnnotationTransform())
+
+    testset = VOCDetection(args.voc_root, [('2007', 'test')],  transform=SSDTestAugmentation(300,cfg.MEANS), target_transform = VOCAnnotationTransform())
     if args.cuda:
         net = net.cuda()
         cudnn.benchmark = True
