@@ -180,8 +180,8 @@ class CosAnnealLR(CyclicLR):
     best to use some sort of learning rate finder
 
     '''
-    RESTART_COSIGN_CYCLE = 0
-    ONE_BEFORE_RESTART_COSIGN_CYCLE = -1
+
+    RESTART_COSIGN_CYCLE = -1
 
     def __init__(self, optimizer, base_lr=1e-3, max_lr=6e-3,
                  mode='cos_anneal', gamma=1,
@@ -190,7 +190,7 @@ class CosAnnealLR(CyclicLR):
                  mode, gamma,
                  scale_fn, scale_mode, last_batch_iteration)
 
-        #how many iterations per batch
+        #how many iterations per epoch
         self.max_iter_per_cycle = numb_images // batch_size
 
         # if [1,2,3] then first cosign descent occurs over 1 epoch,
