@@ -1,6 +1,6 @@
 from data import *
 from utils.augmentations import SSDAugmentation
-from layers.modules import MultiBoxLoss
+from layers.modules.multibox_loss import MultiBoxLoss
 from ssd import build_ssd
 import os
 import sys

@@ -120,13 +120,13 @@ class CyclicLR(object):
         self.gamma = gamma
 
         if scale_fn is None:
-            if self.mode == 'triangular':
+            if self.mode == 'triangular' :
                 self.scale_fn = self._triangular_scale_fn
                 self.scale_mode = 'cycle'
             elif self.mode == 'triangular2':
                 self.scale_fn = self._triangular2_scale_fn
                 self.scale_mode = 'cycle'
-            elif self.mode == 'exp_range':
+            elif self.mode == 'exp_range'or self.mode == 'cosign_anneal':
                 self.scale_fn = self._exp_range_scale_fn
                 self.scale_mode = 'iterations'
 
@@ -172,39 +172,93 @@ class CyclicLR(object):
             self.step_numb+=1
         return lrs
 
+NUMB_IMAGES = 5011  # numb images in VOC2007
 class CosAnnealLR(CyclicLR):
-    NUMB_IMAGES = 5011  # numb images in VOC2007
+    '''
+    Part of stochastic gradient descent with warm restarts
+    be careful with the learning rate, set it too high and you blow your model
+    best to use some sort of learning rate finder
+
+    '''
+    RESTART_COSIGN_CYCLE = 0
+    ONE_BEFORE_RESTART_COSIGN_CYCLE = -1
 
     def __init__(self, optimizer, base_lr=1e-3, max_lr=6e-3,
-                 step_size=2000, mode='exp_range', gamma=0.995,
-                 scale_fn=None, scale_mode='cycle', last_batch_iteration=-1, batch_size = 64, numb_images= NUMB_IMAGES):
+                 mode='cos_anneal', gamma=1,
+                 scale_fn=None, scale_mode='cycle', last_batch_iteration=-1, batch_size = 64, numb_images= NUMB_IMAGES,epochs_per_cycle_schedule = [1,1,2,2,3] ):
         super().__init__(optimizer, base_lr, max_lr,
-                 step_size, mode, gamma,
+                 mode, gamma,
                  scale_fn, scale_mode, last_batch_iteration)
-        #how many iterations until we reset?
-        self.max_iter = numb_images // batch_size
 
-        # cosign varies between 1 and -1 (sweep of 2), factor to scale between lowlr and high_lr
-        scale = 2 / (max_lr - base_lr)
+        #how many iterations per batch
+        self.max_iter_per_cycle = numb_images // batch_size
 
-        # then translate so ranges between lowlr and high_lr
-        self.vals = (np.cos(np.linspace(0, np.pi, self.max_iter)) / scale) + (max_lr - base_lr) / 2 + base_lr
+        # if [1,2,3] then first cosign descent occurs over 1 epoch,
+        # second over 2 epochs, 3rd over 3 epochs for a total of 6 epochs
+        #any after that are over 3 epochs
+        self.epochs_per_cycle_schedule = epochs_per_cycle_schedule
+        self.epochs_per_cycle_schedule_loc = 0
+
+        self.base_lr = base_lr
+        self.max_lr = max_lr
+
+        #diff between base_lr and max_lr
+        diff = max_lr - base_lr
+        total_epochs = sum(self.epochs_per_cycle_schedule)
+        self.max_lr_reducer = diff/total_epochs
+
+        #add to max_lr so it all works out on first calculation
+        self.max_lr +=self.max_lr_reducer
+
+        #start at 0
+        self.current_iteration = CosAnnealLR.RESTART_COSIGN_CYCLE
+        self.loc = CosAnnealLR.RESTART_COSIGN_CYCLE
 
         self.scale_fn = self._exp_range_scale_fn    #OK to scale with this
         self.scale_mode = 'iterations'
         self.writer = SummaryWriter()
 
+    def calculate_learning_rate_range(self):
+        '''
+        generates a list of max_iter_per_cycle learning rates that starts at max_lr and descends
+        to base_lr in a cosign wave
+
+        max_iter_per_cycle changes according to schedule in epochs_per_cycle_schedule
+        '''
+        #gradually reduce the learning rate
+        self.max_lr = self.max_lr-self.max_lr_reducer
+
+        # cosign varies between 1 and -1 (sweep of 2), factor to scale between lowlr and high_lr
+        scale = 2 / (self.max_lr - self.base_lr)
+
+        # then translate so ranges between low_lr and high_lr
+        self.vals = (np.cos(np.linspace(0, np.pi, self.max_iter_per_cycle)) / scale) + (self.max_lr - self.base_lr) / 2 + self.base_lr
+
     def setWriter(self,writer):
         self.writer = writer
 
+    # def __getCycleMult():
+    #
+
     def get_lr(self):
-        loc= self.last_batch_iteration%self.max_iter
-        lr = self.vals[loc]
+
+        # time to go to the next cycle length?
+        if (self.loc == CosAnnealLR.RESTART_COSIGN_CYCLE):
+            if (self.epochs_per_cycle_schedule_loc < len(self.epochs_per_cycle_schedule)):
+                self.max_iter_per_cycle= self.max_iter_per_cycle * self.epochs_per_cycle_schedule[self.epochs_per_cycle_schedule_loc]
+                self.epochs_per_cycle_schedule_loc += 1
+                self.calculate_learning_rate_range()
+                print(f"   number vals {len(self.vals)}")
+                self.current_iteration = CosAnnealLR.RESTART_COSIGN_CYCLE
 
         lrs=[]
-        lrs.append(lr)
+        lrs.append(self.vals[self.loc])
 
         self.writer.add_scalar('cosann', lrs[0], self.last_batch_iteration)
+
+        #set up for next time
+        self.current_iteration += 1
+        self.loc= (self.current_iteration)%self.max_iter_per_cycle
 
         return lrs
 

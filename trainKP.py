@@ -1,6 +1,6 @@
 from data import *
 from utils.augmentations import SSDAugmentation
-from layers.modules import MultiBoxLoss
+from layers.modules.multibox_loss import MultiBoxLoss
 from ssd import build_ssd
 import os
 import sys
@@ -64,13 +64,18 @@ if not os.path.exists(args.save_folder):
     os.mkdir(args.save_folder)
 
 def train():
-    NUMB_EPOCHS = 10
+    NUMB_EPOCHS = 200
+    EPOCH_WHERE_WHOLE_NETWORK_TRAINED = 4
+    BEST_WEIGHTS_FILE = 'model_best_weights_10.pth'
+    MAX_LEARNING_RATE = 1e-3
+    MIN_LEARNING_RATE = 1e-4
 
     cfg = voc
     dataset = VOCDetection(root=args.dataset_root,image_sets=[('2007', 'trainval')],
                                transform=SSDAugmentation(cfg['min_dim'],MEANS))
 
     ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
+    # ssd_net = torch.nn.DataParallel(ssd_net)
 
     print('Initializing weights...')
     ssd_net.extras.apply(weights_init)
@@ -113,7 +118,7 @@ def train():
     # scheduler = utilsKP.CyclicLR(optimizer, base_lr=1e-4, max_lr=5e-3,step_size = 150)
 
     #or how about cosign annealing with warm restarts
-    scheduler = utilsKP.CosAnnealLR(optimizer, base_lr=1e-4, max_lr=5e-3, step_size=150,batch_size = 64)
+    scheduler = utilsKP.CosAnnealLR(optimizer, base_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,batch_size = 64)
 
     # we are going to train so set up gradients
     ssd_net.train()
@@ -161,10 +166,17 @@ def train():
 
         #for first few epochs do not backprop through vgg
         #train custom head first
-        if (epoch == NUMB_EPOCHS-6):
+        if (epoch == EPOCH_WHERE_WHOLE_NETWORK_TRAINED):
             utilsKP.do_requires_grad(ssd_net.vgg, requires_grad=True, apply_to_this_layer_on=24)
             optimizer = optim.SGD(filter(lambda p: p.requires_grad, ssd_net.parameters()), lr=args.lr, momentum=args.momentum,
                                   weight_decay=args.weight_decay)
+        # #########################
+        # #dump this
+        # if iteration in cfg['lr_steps']:
+        #     step_index += 1
+        #     adjust_learning_rate(optimizer, args.gamma, step_index)
+        # #########################
+
 
         #iterate until finish epoch
         for batch_cntr, (images, targets) in enumerate(batch_iterator):
@@ -192,7 +204,7 @@ def train():
                 # print(f"New lowest loss! Was {loss_lowest} is now {loss}")
                 loss_lowest = loss
                 torch.save(ssd_net.state_dict(),
-                           args.save_folder + '' + 'model_best_weights_10.pth')
+                           args.save_folder + '' + BEST_WEIGHTS_FILE)
 
             loss.backward()
             optimizer.step()
@@ -210,6 +222,16 @@ def train():
                 writer.add_scalar('logs/loss_C', loss_c.item(), all_batch_cntr)
                 writer.add_scalar('logs/loss_Total', loss, all_batch_cntr)
 
+# test for same behaviour
+def adjust_learning_rate(optimizer, gamma, step):
+    """Sets the learning rate to the initial LR decayed by 10 at every
+        specified step
+    # Adapted from PyTorch Imagenet example:
+    # https://github.com/pytorch/examples/blob/master/imagenet/main.py
+    """
+    lr = args.lr * (gamma ** (step))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
 
 def xavier(param):
     init.xavier_uniform_(param)

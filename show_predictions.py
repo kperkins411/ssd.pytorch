@@ -5,9 +5,10 @@ import cv2
 import time
 from imutils.video import FPS, WebcamVideoStream
 import argparse
+from itertools import cycle
 
 parser = argparse.ArgumentParser(description='Single Shot MultiBox Detection')
-parser.add_argument('--weights', default='../weights/model_best_weights_10.pth',
+parser.add_argument('--weights', default='./weights/model_best_weights_10.pth',
                     type=str, help='Trained state_dict file path')
 parser.add_argument('--cuda', default=True, type=bool,
                     help='Use cuda in live demo')
@@ -16,8 +17,7 @@ args = parser.parse_args()
 COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
-
-def cv2_demo(net, transform):
+def showImage(net, transform):
     def predict(frame):
         height, width = frame.shape[:2]
         x = torch.from_numpy(transform(frame)[0]).permute(2, 0, 1)
@@ -39,32 +39,36 @@ def cv2_demo(net, transform):
                 j += 1
         return frame
 
+
     # start video stream thread, allow buffer to fill
     print("[INFO] starting threaded video stream...")
     stream = WebcamVideoStream(src=0).start()  # default camera
     time.sleep(1.0)
     # start fps timer
     # loop over frames from the video file stream
+    img_no=1
+    tot_test_images = 8
+    test_images=['1.jpg','2.jpg','3.jpg','4.jpg']
+    train_images = ['000005.jpg', '000007.jpg', '000009.jpg', '000012.jpg']
+    test_images.extend(train_images)
+    all_images_itr = cycle(iter(test_images))
     while True:
-        # grab next frame
-        frame = stream.read()
-        key = cv2.waitKey(1) & 0xFF
+        # grab image
+        imgstr = str(next(all_images_itr))
+        img = "./test_data/" + imgstr
+        frame = cv2.imread(img)
 
-        # update FPS counter
-        fps.update()
+
+
         frame = predict(frame)
-
-        # keybindings for display
-        if key == ord('p'):  # pause
-            while True:
-                key2 = cv2.waitKey(1) or 0xff
-                cv2.imshow('frame', frame)
-                if key2 == ord('p'):  # resume
-                    break
         cv2.imshow('frame', frame)
-        if key == 27:  # exit
-            break
 
+        # wait for user to click a key
+        key = cv2.waitKey()
+
+        # and bail if its x
+        if key == 'x':
+            exit
 
 if __name__ == '__main__':
     import sys
@@ -75,18 +79,9 @@ if __name__ == '__main__':
     from ssd import build_ssd
 
     net = build_ssd('test', 300, 21)    # initialize SSD
-    import os; print(os.getcwd())
     net.load_state_dict(torch.load(args.weights))
     transform = BaseTransform(net.size, (104/256.0, 117/256.0, 123/256.0))
 
     fps = FPS().start()
-    cv2_demo(net.eval(), transform)
-    # stop the timer and display FPS information
-    fps.stop()
+    showImage(net.eval(), transform)
 
-    print("[INFO] elasped time: {:.2f}".format(fps.elapsed()))
-    print("[INFO] approx. FPS: {:.2f}".format(fps.fps()))
-
-    # cleanup
-    cv2.destroyAllWindows()
-    stream.stop()
