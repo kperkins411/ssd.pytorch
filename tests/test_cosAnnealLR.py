@@ -35,24 +35,16 @@ net = Net()
 
 #total images
 numb_images = 5011
-bs =10
+bs =64
 numb_iter_epoch = numb_images/bs
 
 optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9)
-scheduler = utilsKP.CosAnnealLR(optimizer,base_lr=1, max_lr=2, batch_size=bs, numb_images = numb_images)
+scheduler = utilsKP.CosAnnealLR(optimizer,base_lr=1, max_lr=2, batch_size=bs, numb_images = numb_images, epochs_per_cycle_schedule = [1,1,2,2,3,3,8, 6,6])
 
 # use same writer for LR
 scheduler.setWriter(writer)
 
 for i in range(30):
-    print(f"batch number{i}")
+    print(f"batch number {i}")
     for j in range(int(numb_iter_epoch)):
         scheduler.batch_step()
-
-
-
-    # def test_setWriter(self):
-    #     self.fail()
-    #
-    # def test_get_lr(self):
-    #     self.fail()
