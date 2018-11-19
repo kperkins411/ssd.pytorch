@@ -2,6 +2,7 @@ import torch.optim as optim
 import numpy as np
 #logging for tensorflow
 from tensorboardX import SummaryWriter
+import math
 
 def do_requires_grad(model,*,requires_grad, apply_to_this_layer_on =0):
     '''
@@ -196,29 +197,125 @@ class Writer:
         self.writer=writer
 
 
+class LR(object):
+    '''
+    Base class, returns a single cycle of learning rates
+    '''
+    def __call__(self, *args, **kwargs):
+        return self.getLRs()
+
+    def getLRs(self,numb_iterations,max_lr, min_lr):
+        '''
+        :param numb_iterations: number total samples
+        :param max_lr: upper
+        :param min_lr: lower
+        :return: list of learning rates, numb_iterations long
+        '''
+        raise NotImplementedError
+
+class TriangularLR(LR):
+    def getStepSize(self,numb_iterations):
+        return numb_iterations // 2
+
+    def getLRs(self, numb_iterations, max_lr, min_lr):
+        # determines the halfway point
+        step_size = self.getStepSize(numb_iterations)
+        data = []
+        for itr in range(numb_iterations):
+            cycle = math.floor(1 + itr / (2 * step_size))
+            x = abs(itr / step_size - 2 * cycle + 1)
+            lr = max_lr + (max_lr - min_lr) * max(0, (1 - x))
+            data.append(lr)
+        return data
+
+class TriangularLR_LRFinder(TriangularLR):
+    def getStepSize(self,numb_iterations):
+        return numb_iterations #makes stepsize and numb_iterations equal, you get first half of triangular wave
+
+class CosignLR(LR):
+    def getLRs(self, numb_iterations, max_lr, min_lr):
+        '''
+        Cosign that starts at max_lr and decreases to min_lr
+        '''
+        scale = 2 / (max_lr - min_lr)
+
+        # then translate so ranges between low_lr and high_lr
+        data = (np.cos(np.linspace(0, np.pi, numb_iterations)) /
+                scale) + (max_lr - min_lr) / 2 + min_lr
+        return data
+# def getTriangularLRs(numb_iterations,max_lr, min_lr, step_size =None):
+#     '''
+#     returns a single tooth /\ of a sawtooth wave that varies from min_lr to max_lr
+#    :param numb_iterations:  total learning_rates to generate, make an even number so stepsize will be 1/2 of it
+#     :param max_lr:
+#     :param min_lr:
+#     :param  step_size =None  used for learning rate finder do several epochs, with increasing LRs
+#             to determine appropriate range
+#     :return: list of learning rates
+#     '''
+#     data = []
+#     #set stepsize == numb_iterations (1/2 sawtooth) for calculating appropriate Learning rate range
+#     if step_size == None:
+#         stepsize = numb_iterations//2
+#
+#     for itr in range(numb_iterations):
+#         cycle = math.floor(1+ itr/(2*stepsize))
+#         x=abs(itr/stepsize -2*cycle +1)
+#         lr = max_lr +(max_lr - min_lr)*max(0,(1-x))
+#         data.append(lr)
+#     return data
+#
+#
+# def getCosignLRs(numb_iterations,max_lr, min_lr):
+#     '''
+#     generates a list of max_iter_per_cycle learning rates that starts at max_lr and descends
+#     to base_lr in a cosign wave
+#     max_iter_per_cycle changes according to schedule in epochs_per_cycle_schedule
+#     :param numb_iterations:  total learning_rates to generate, make an even number so stepsize will be 1/2 of it
+#     :param max_lr:
+#     :param min_lr:
+#      :return: list of learning rates
+#     '''
+#     # cosign varies between 1 and -1 (sweep of 2), factor to scale between lowlr and high_lr
+#     scale = 2 / (max_lr - min_lr)
+#
+#     # then translate so ranges between low_lr and high_lr
+#     data = (np.cos(np.linspace(0, np.pi, numb_iterations)) / scale) + (max_lr - min_lr) / 2 + min_lr
+#     return data
+
 NUMB_IMAGES = 5011  # numb images in VOC2007
-class CosAnnealLR(object):
+class CyclicLR(object):
     '''
        Part of stochastic gradient descent with warm restarts
        be careful with the learning rate, set it too high and you blow your model
+
+       make sure epochs_per_cycle_schedule has all the epochs you plan to run divvied up into cycles
+       for example if I plan 50 epochs I might define epochs_per_cycle_schedule = [5,5,5,5,10,10,10]
+       if make_last_cycle_base_lr = True then the last cycle consisting of 10 epochs will all run at base_lr
+
        best to use some sort of learning rate finder
 
     '''
-    RESTART_COSIGN_CYCLE = 0
-    def __init__(self, optimizer, base_lr=1e-3, max_lr=6e-3,
-                 batch_size = 64, numb_images= NUMB_IMAGES,epochs_per_cycle_schedule = [1,1,2,2,3] ):
+    RESTART_CYCLE = 0
+    def __init__(self, optimizer, LR, base_lr=1e-3, max_lr=6e-3,
+                 batch_size = 64, numb_images= NUMB_IMAGES,
+                 epochs_per_cycle_schedule = [1,1,2,2,3], make_last_cycle_base_lr = True):
         '''
-        :param optimizer:
-        :param base_lr:
-        :param max_lr:
+        :param optimizer:  optimizer, used primarily for applying learning rate to params
+        :param base_lr:  the minimum learning rate
+        :param max_lr:  the maximum learning rate
         :param batch_size:
         :param numb_images:
         :param epochs_per_cycle_schedule: this should sum to total number of epochs or your last epoch has lr somewhere
          between max_lr and base_lr
+        :param make_last_cycle_base_lr if last cycle should have all learning rates = base_lr
         '''
 
         #apply learning rates to optimizer layers
         self.optimizer = optimizer
+
+        #learning rate object
+        self.LR = LR
 
         #how many iterations per epoch
         self.max_iter_per_cycle = numb_images // batch_size
@@ -232,6 +329,14 @@ class CosAnnealLR(object):
         self.base_lr = base_lr
         self.max_lr = max_lr
 
+        #gradually reduce max_lr
+        numb_cycles = len(self.epochs_per_cycle_schedule)
+
+        if (make_last_cycle_base_lr == True):
+            numb_cycles -=1    #will make the last cycle equal to the base learning rate
+
+        self.max_lr_reducer = (self.max_lr - self.base_lr) /numb_cycles
+
         self.batch_size = batch_size
         self.numb_images = numb_images
 
@@ -239,8 +344,8 @@ class CosAnnealLR(object):
         self.pad = 1 if numb_images % self.batch_size > 0 else 0
 
         #start at 0
-        self.current_iteration = CosAnnealLR.RESTART_COSIGN_CYCLE
-        self.loc = CosAnnealLR.RESTART_COSIGN_CYCLE
+        self.current_iteration = CyclicLR.RESTART_CYCLE
+        self.loc = CyclicLR.RESTART_CYCLE
 
         # self.scale_fn = self._exp_range_scale_fn    #OK to scale with this
         # self.scale_mode = 'iterations'
@@ -266,8 +371,6 @@ class CosAnnealLR(object):
         reduce the max learning rate after each complete cosign cycle
         :return:
         '''
-        self.max_lr_reducer=(self.max_lr - self.base_lr)/len(self.epochs_per_cycle_schedule)
-
         return self.max_lr- self.epochs_per_cycle_schedule_loc* self.max_lr_reducer
 
     def _calculate_learning_rate_range(self):
@@ -280,15 +383,12 @@ class CosAnnealLR(object):
         #gradually reduce the learning rate
         maxlr = self._getMaxLearningRate()
 
-        # cosign varies between 1 and -1 (sweep of 2), factor to scale between lowlr and high_lr
-        scale = 2 / (maxlr - self.base_lr)
-
         # then translate so ranges between low_lr and high_lr
-        self.vals = (np.cos(np.linspace(0, np.pi, self._getNumberIterations())) / scale) + (maxlr - self.base_lr) / 2 + self.base_lr
+        self.vals = LR.getLRs(self.max_iter_per_cycle,maxlr, self.base_lr)
 
     def _get_lr(self):
         # time to go to the next cycle length?
-        if (self.loc == CosAnnealLR.RESTART_COSIGN_CYCLE):
+        if (self.loc == CyclicLR.RESTART_CYCLE):
             if (self.epochs_per_cycle_schedule_loc < len(self.epochs_per_cycle_schedule)):
                 self._calculate_learning_rate_range()
                 print(f"   number vals {len(self.vals)}")
@@ -305,7 +405,7 @@ class CosAnnealLR(object):
         #set up for next time, either the next learning rate or restart
         self.loc +=1
         if (self.loc ==len(self.vals)):
-            self.loc = CosAnnealLR.RESTART_COSIGN_CYCLE
+            self.loc = CyclicLR.RESTART_CYCLE
 
         return lrs
 

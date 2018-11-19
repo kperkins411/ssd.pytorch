@@ -64,8 +64,8 @@ if not os.path.exists(args.save_folder):
     os.mkdir(args.save_folder)
 
 def train():
-    NUMB_EPOCHS = 200
-    EPOCH_WHERE_WHOLE_NETWORK_TRAINED = 4
+    NUMB_EPOCHS = 50
+    EPOCH_WHERE_WHOLE_NETWORK_TRAINED = 15
     BEST_WEIGHTS_FILE = 'model_best_weights_10.pth'
     MAX_LEARNING_RATE = 1e-3
     MIN_LEARNING_RATE = 1e-4
@@ -118,7 +118,7 @@ def train():
     # scheduler = utilsKP.CyclicLR(optimizer, base_lr=1e-4, max_lr=5e-3,step_size = 150)
 
     #or how about cosign annealing with warm restarts
-    scheduler = utilsKP.CosAnnealLR(optimizer, base_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,batch_size = 64)
+    scheduler = utilsKP.CosAnnealLR(optimizer, base_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,batch_size = 64, epochs_per_cycle_schedule = [5,5,5,5,10,10,10])
 
     # we are going to train so set up gradients
     ssd_net.train()
