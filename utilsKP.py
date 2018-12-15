@@ -2,6 +2,7 @@ import torch.optim as optim
 import numpy as np
 #logging for tensorflow
 from tensorboardX import SummaryWriter
+
 import math
 
 def do_requires_grad(model,*,requires_grad, apply_to_this_layer_on =0):
@@ -173,29 +174,33 @@ class CyclicLR(object):
             self.step_numb+=1
         return lrs
 
+import tensorflow as tf
+from datetime import datetime
+
 
 class Writer:
     '''
     just a class to make it easy to track tensorboard events
     '''
-    def __init__(self):
-        self.writer = None
+    def __init__(self, log_dir):
+        now = datetime.now()
+        logdir = log_dir +"/" + now.strftime("%Y%m%d-%H%M%S") + "/"
+        self.writer = tf.summary.FileWriter(logdir)
         self.last_batch_iteration = 0
 
-    def __call__(self,name, lr):
+    def __call__(self,name, lr, iter=None):
         '''
         used to write to tensorboard
         :param name: string name of var to track
         :param lr:
         :return:
         '''
-        if (self.writer is not None):
-            self.writer.add_scalar(name, lr, self.last_batch_iteration)
-            self.last_batch_iteration+=1
-
-    def setWriter(self,writer):
-        self.writer=writer
-
+        """Log a scalar variable."""
+        iter1 = iter if iter is None else self.last_batch_iteration
+        summary = tf.Summary(value=[tf.Summary.Value(tag=name, simple_value=lr)])
+        self.writer.add_summary(summary, self.last_batch_iteration)
+        # print(f"Writer:{self.last_batch_iteration}: lr:{lr} ")
+        self.last_batch_iteration+=1
 
 class LR(object):
     '''
@@ -224,7 +229,7 @@ class TriangularLR(LR):
         for itr in range(numb_iterations):
             cycle = math.floor(1 + itr / (2 * step_size))
             x = abs(itr / step_size - 2 * cycle + 1)
-            lr = max_lr + (max_lr - min_lr) * max(0, (1 - x))
+            lr = min_lr + (max_lr - min_lr) * max(0, (1 - x))
             data.append(lr)
         return data
 
@@ -237,12 +242,28 @@ class CosignLR(LR):
         '''
         Cosign that starts at max_lr and decreases to min_lr
         '''
-        scale = 2 / (max_lr - min_lr)
 
         # then translate so ranges between low_lr and high_lr
-        data = (np.cos(np.linspace(0, np.pi, numb_iterations)) /
-                scale) + (max_lr - min_lr) / 2 + min_lr
+        data = (np.cos(np.linspace(0, np.pi, numb_iterations))) + (max_lr - min_lr) / 2 + min_lr
         return data
+
+class LR_anneal(object):
+     def getMaxLR(self,step_size,max_lr,min_lr):
+        raise NotImplemented
+
+class LR_anneal_linear(LR_anneal):
+    def __init__(self):
+        self.cur_decrement = 0                 #ensures start at 0
+
+    def getMaxLR(self,step_size,max_lr,min_lr):
+        numb_decrements = len(step_size)  # reduce every time we start another cycle
+        max_lr_reducer = (max_lr - min_lr) / numb_decrements
+
+        # gradually reduce max_lr, but not below min_lr
+        maxlr = max((max_lr-self.cur_decrement*max_lr_reducer), min_lr)
+        self.cur_decrement += 1
+        return maxlr
+
 # def getTriangularLRs(numb_iterations,max_lr, min_lr, step_size =None):
 #     '''
 #     returns a single tooth /\ of a sawtooth wave that varies from min_lr to max_lr
@@ -284,94 +305,92 @@ class CosignLR(LR):
 #     return data
 
 NUMB_IMAGES = 5011  # numb images in VOC2007
-class CyclicLR(object):
+class CyclicLR_Scheduler(object):
     '''
        Part of stochastic gradient descent with warm restarts
        be careful with the learning rate, set it too high and you blow your model
 
-       make sure epochs_per_cycle_schedule has all the epochs you plan to run divvied up into cycles
-       for example if I plan 50 epochs I might define epochs_per_cycle_schedule = [5,5,5,5,10,10,10]
-       if make_last_cycle_base_lr = True then the last cycle consisting of 10 epochs will all run at base_lr
+       be sure the number of batches you run is equal to sum(step_size)*2 to get the learning rate to min_lr
+       for example, step_size = [5,5,5,5,10,10,10]  then number batches = 50*2=100
 
        best to use some sort of learning rate finder
 
     '''
     RESTART_CYCLE = 0
-    def __init__(self, optimizer, LR, base_lr=1e-3, max_lr=6e-3,
-                 batch_size = 64, numb_images= NUMB_IMAGES,
-                 epochs_per_cycle_schedule = [1,1,2,2,3], make_last_cycle_base_lr = True):
+    NUMBER_STEPS_PER_CYCLE = 2
+    def __init__(self, optimizer,*,min_lr, max_lr, LR,LR_anneal=None,
+                 batch_size = 64, numb_images= NUMB_IMAGES,step_size=[2], writer =None):
         '''
         :param optimizer:  optimizer, used primarily for applying learning rate to params
+        :param min_lr:
+        :param max_lr:
+        :param LR:  calculates a single cycle of the learning rate
+        :param LR_anneal:  anneals the learning rate if present
         :param base_lr:  the minimum learning rate
         :param max_lr:  the maximum learning rate
         :param batch_size:
         :param numb_images:
-        :param epochs_per_cycle_schedule: this should sum to total number of epochs or your last epoch has lr somewhere
-         between max_lr and base_lr
-        :param make_last_cycle_base_lr if last cycle should have all learning rates = base_lr
+        :param step_size:number of training images per 1/2 cycle, authors suggest setting it between 2 and 10
+                        can be a list, if 4 the whole cycle has 2*(4*numb_images//batch_size) = #iterations/cycle
+                        this should sum to total number of epochs or your last epoch has lr somewhere
+                        between max_lr and base_lr
+        :param writer: tensorboard writer (see above)
+        usage:
+        >>>lr = TriangularLR(max_lr, min_lr)
+        >>>lra = LR_anneal_linear(step_size,max_lr,min_lr)
+        >>>crs = CyclicLR_Scheduler(optimizer, LR,LR_anneal)
+
         '''
 
         #apply learning rates to optimizer layers
         self.optimizer = optimizer
 
+        self.min_lr = min_lr
+        self.max_lr=max_lr;
+
         #learning rate object
         self.LR = LR
 
+        #learning rate annealer
+        self.LR_anneal = LR_anneal
+
         #how many iterations per epoch
-        self.max_iter_per_cycle = numb_images // batch_size
-
-        # if [1,2,3] then first cosign descent occurs over 1 epoch,
-        # second over 2 epochs, 3rd over 3 epochs for a total of 6 epochs
-        #any after that are over 3 epochs
-        self.epochs_per_cycle_schedule = epochs_per_cycle_schedule
-        self.epochs_per_cycle_schedule_loc = 0
-
-        self.base_lr = base_lr
-        self.max_lr = max_lr
-
-        #gradually reduce max_lr
-        numb_cycles = len(self.epochs_per_cycle_schedule)
-
-        if (make_last_cycle_base_lr == True):
-            numb_cycles -=1    #will make the last cycle equal to the base learning rate
-
-        self.max_lr_reducer = (self.max_lr - self.base_lr) /numb_cycles
-
         self.batch_size = batch_size
         self.numb_images = numb_images
 
+        #TODO fix this
         # covers the last partial batch
-        self.pad = 1 if numb_images % self.batch_size > 0 else 0
+        # self.pad = 1 if numb_images % self.batch_size > 0 else 0
+        self.pad=0
+
+        #number iterations per batch
+        self.max_iter_per_epoch = numb_images // batch_size + self.pad
+
+        # if [1,2,3] then first cosign descent occurs over 1*2 epoch,
+        # second over 2*2 epochs, 3rd over 3*2 epochs for a total of 12 epochs
+        #any after that are over 6 epochs
+        self.step_size = step_size
+        self.step_size_loc =CyclicLR_Scheduler.RESTART_CYCLE  #when incremented starts at 0
+
 
         #start at 0
-        self.current_iteration = CyclicLR.RESTART_CYCLE
-        self.loc = CyclicLR.RESTART_CYCLE
+        self.loc = CyclicLR_Scheduler.RESTART_CYCLE
 
-        # self.scale_fn = self._exp_range_scale_fn    #OK to scale with this
-        # self.scale_mode = 'iterations'
-        self.writer = Writer()
-        pass
+        #the list of lrs periodically refreshed
+        self.vals = []
+        self.writer = writer
 
     def _getNumberIterations(self):
         '''
-        how many batches for this cycle
-        if 1 epochs per cycle, then LRs contains numb batches   values from max_lr to base LR
-        if 2 epochs per cycle, then LRs contains numb batches*2 values from max_lr to base LR
+        how many iterations for this cycle
         :return:
         '''
+        n_itr = ((self.step_size[self.step_size_loc])*self.max_iter_per_epoch )*CyclicLR_Scheduler.NUMBER_STEPS_PER_CYCLE
 
-        #how many epochs per cosign cycle
-        multiplier = self.epochs_per_cycle_schedule[self.epochs_per_cycle_schedule_loc]
-        self.epochs_per_cycle_schedule_loc+=1   #go to the next one
-
-        return (self.numb_images//self.batch_size)*multiplier + self.pad
-
-    def _getMaxLearningRate(self):
-        '''
-        reduce the max learning rate after each complete cosign cycle
-        :return:
-        '''
-        return self.max_lr- self.epochs_per_cycle_schedule_loc* self.max_lr_reducer
+        # only advance if there are more, otherwise stay at the last one
+        if (self.step_size_loc < len(self.step_size)-1):
+            self.step_size_loc += 1  # go to the next one
+        return n_itr
 
     def _calculate_learning_rate_range(self):
         '''
@@ -381,45 +400,38 @@ class CyclicLR(object):
         '''
 
         #gradually reduce the learning rate
-        maxlr = self._getMaxLearningRate()
+        maxlr = self.max_lr
+        if self.LR_anneal is not None:
+            maxlr = self.LR_anneal.getMaxLR(step_size=self.step_size,max_lr= self.max_lr,min_lr=self.min_lr)
 
         # then translate so ranges between low_lr and high_lr
-        self.vals = LR.getLRs(self.max_iter_per_cycle,maxlr, self.base_lr)
+        self.vals = self.LR.getLRs(numb_iterations = self._getNumberIterations(), max_lr=maxlr, min_lr=self.min_lr)
 
     def _get_lr(self):
+        #time to restart?
+        if (self.loc == len(self.vals)):
+            self.loc = CyclicLR_Scheduler.RESTART_CYCLE
+
         # time to go to the next cycle length?
-        if (self.loc == CyclicLR.RESTART_CYCLE):
-            if (self.epochs_per_cycle_schedule_loc < len(self.epochs_per_cycle_schedule)):
-                self._calculate_learning_rate_range()
-                print(f"   number vals {len(self.vals)}")
-            else:
-                #just return the lowest learning rate
-                self.loc=len(self.epochs_per_cycle_schedule)-1
-                # raise (IndexError,"finished all epochs_per_cycle_schedule entries")
+        if (self.loc == CyclicLR_Scheduler.RESTART_CYCLE):
+            self._calculate_learning_rate_range()
 
         lrs=[]
         lrs.append(self.vals[self.loc])
 
-        self.writer('cosann', lrs[0])
+        #prepare for the next one
+        self.loc += 1
 
-        #set up for next time, either the next learning rate or restart
-        self.loc +=1
-        if (self.loc ==len(self.vals)):
-            self.loc = CyclicLR.RESTART_CYCLE
-
+        if (self.writer is not None):
+            self.writer('CLRS', lrs[0])
+        # print(f"     lr{lrs[0]}")
         return lrs
 
     def batch_step(self):
          for param_group, lr in zip(self.optimizer.param_groups, self._get_lr()):
             param_group['lr'] = lr
+         self.cur_lr = lr   #used in learning rate finder
 
-    def setWriter(self, writer):
-         '''
-         for tensorboard
-         :param writer:
-         :return:
-         '''
-         self.writer.setWriter(writer)
 
 # class CosAnnealLR(CyclicLR):
 #     '''

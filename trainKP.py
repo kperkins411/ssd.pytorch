@@ -14,8 +14,6 @@ import torch.nn.init as init
 import torch.utils.data as data
 import numpy as np
 import argparse
-from tensorboardX import SummaryWriter
-# import tf_logger
 
 import utilsKP
 
@@ -69,6 +67,9 @@ def train():
     BEST_WEIGHTS_FILE = 'model_best_weights_10.pth'
     MAX_LEARNING_RATE = 1e-3
     MIN_LEARNING_RATE = 1e-4
+    # STEP_SIZE = [5, 5, 5, 5, 10, 10, 10]
+    STEP_SIZE=[1]
+    numb_epochs = sum(STEP_SIZE)*2
 
     cfg = voc
     dataset = VOCDetection(root=args.dataset_root,image_sets=[('2007', 'trainval')],
@@ -117,8 +118,12 @@ def train():
     #lets try this new fancy cyclic learning rate
     # scheduler = utilsKP.CyclicLR(optimizer, base_lr=1e-4, max_lr=5e-3,step_size = 150)
 
-    #or how about cosign annealing with warm restarts
-    scheduler = utilsKP.CosAnnealLR(optimizer, base_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,batch_size = 64, epochs_per_cycle_schedule = [5,5,5,5,10,10,10])
+    #or how about triangular or cosign annealing with warm restarts
+    # lr = utilsKP.TriangularLR()
+    lr = utilsKP.TriangularLR_LRFinder()
+    # lra = utilsKP.LR_anneal_linear()
+    lra = None
+    scheduler = utilsKP.CyclicLR_Scheduler(optimizer, min_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,LR=lr,LR_anneal=lra,batch_size = 64,numb_images = utilsKP.NUMB_IMAGES, step_size = STEP_SIZE)
 
     # we are going to train so set up gradients
     ssd_net.train()
@@ -137,16 +142,16 @@ def train():
                                   shuffle=True, collate_fn=detection_collate,
                                   pin_memory=True)
 
-    #logging for tensorflow
-    writer = SummaryWriter()
+    # logging for tensorflow
+    writer = utilsKP.Writer('./runs')
 
-    #use same writer for LR
-    scheduler.setWriter(writer)
+    # #use same writer for LR
+    # scheduler.setWriter(writer)
 
     all_batch_cntr =0
     loss_lowest = 10000
 
-    for epoch in range(NUMB_EPOCHS):
+    for epoch in range(numb_epochs):
         print(f"Starting epoch {epoch}")
 
         #we are going to use a lot of memory for the model and for the images, see whats being used on the GPU below
@@ -214,13 +219,14 @@ def train():
             loc_loss += loss_l.item()
             conf_loss += loss_c.item()
 
-            if batch_cntr % 10 == 0:
+            if batch_cntr % 1 == 0:
                 print(f'batch_cntr ={batch_cntr} || Loss: {loss.item()}')
 
                 all_batch_cntr += batch_cntr
-                writer.add_scalar('logs/loss_L', loss_l.item(), all_batch_cntr)
-                writer.add_scalar('logs/loss_C', loss_c.item(), all_batch_cntr)
-                writer.add_scalar('logs/loss_Total', loss, all_batch_cntr)
+                writer('loss_L', loss_l.item(), all_batch_cntr)
+                writer('loss_C', loss_c.item(), all_batch_cntr)
+                writer('loss_Total', loss, all_batch_cntr)
+                writer('learning_rate', scheduler.cur_lr, loss)
 
 # test for same behaviour
 def adjust_learning_rate(optimizer, gamma, step):
