@@ -16,6 +16,8 @@ import numpy as np
 import argparse
 
 import utilsKP
+import utils_tb_writer
+import utils_LR
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
@@ -120,10 +122,10 @@ def train():
 
     #or how about triangular or cosign annealing with warm restarts
     # lr = utilsKP.TriangularLR()
-    lr = utilsKP.TriangularLR_LRFinder()
+    lr = utils_LR.TriangularLR_LRFinder()
     # lra = utilsKP.LR_anneal_linear()
     lra = None
-    scheduler = utilsKP.CyclicLR_Scheduler(optimizer, min_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,LR=lr,LR_anneal=lra,batch_size = 64,numb_images = utilsKP.NUMB_IMAGES, step_size = STEP_SIZE)
+    scheduler = utils_LR.CyclicLR_Scheduler(optimizer, min_lr=MIN_LEARNING_RATE, max_lr=MAX_LEARNING_RATE,LR=lr,LR_anneal=lra,batch_size = 64,numb_images = utils_LR.NUMB_IMAGES, step_size = STEP_SIZE)
 
     # we are going to train so set up gradients
     ssd_net.train()
@@ -143,7 +145,7 @@ def train():
                                   pin_memory=True)
 
     # logging for tensorflow
-    writer = utilsKP.Writer('./runs')
+    writer = utils_tb_writer.Writer('./runs')
 
     # #use same writer for LR
     # scheduler.setWriter(writer)
